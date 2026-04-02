@@ -379,22 +379,24 @@ class NetAcadLearner:
     # ═══════════════════════════════════════════════════════
 
     async def _enter_course(self):
-        """
-        进入目标课程。
-        
-        Dashboard 结构（根据截图）：
-        - 左侧"我的学习"区：课程卡片网格，每个卡片有课程名称链接
-        - 右侧：最新成就、即将到来的任务（这些不要点！）
-        - 课程卡片标题如："网络信息安全技术" / "English for IT 1" / "CCNA: 企业网络..."
-        """
+        """进入目标课程 — 直接点击第二个课程卡片的播放按钮"""
         if self.course_url:
             log.info(f"📖 直接打开课程: {self.course_url}")
             await self.page.goto(self.course_url, wait_until="domcontentloaded")
             await asyncio.sleep(5)
             return
 
-        log.info(f"📚 在仪表盘查找课程: 《{self.course_name}》")
-        await self.page.goto(NETACAD_DASHBOARD, wait_until="domcontentloaded")
+        log.info(f"📚 在仪表盘查找课程: 《{self.course_name}》（第2个卡片）")
+        
+        # 登录成功后可能已经在 dashboard，检查当前 URL
+        current = self.page.url
+        if "dashboard" not in current:
+            try:
+                await self.page.goto(NETACAD_DASHBOARD, wait_until="domcontentloaded")
+            except Exception:
+                # ERR_ABORTED 说明页面已在加载/跳转中，等一等就好
+                log.info("⏳ 页面跳转中，等待...")
+                await asyncio.sleep(5)
 
         # 等待 SPA 内容渲染
         log.info("⏳ 等待仪表盘内容加载...")
@@ -410,115 +412,80 @@ class NetAcadLearner:
         await asyncio.sleep(2)
         await self.page.screenshot(path=screenshot_path("dashboard"), full_page=True)
 
-        # ─── 关闭 Cookie 横幅（如果有）───
-        try:
-            cookie_close = self.page.locator('[class*="cookie"] button, [class*="cookie"] a, [aria-label*="close"][class*="cookie"], button:has-text("×")')
-            if await cookie_close.count() > 0:
-                await cookie_close.first.click()
-                log.info("🍪 关闭了 Cookie 横幅")
-                await asyncio.sleep(1)
-        except Exception:
-            pass
+        # ─── 直接点击第二个课程卡片的播放按钮 ───
+        # Dashboard 课程卡片布局（从截图确认）：
+        # 第1个: English for IT 1
+        # 第2个: 网络信息安全技术 (Cybersecurity Essentials) ← 目标
+        # 第3个: CCNA：企业网络
+        # 每个卡片缩略图中心有一个播放按钮(SVG圆形play icon)
 
-        # ─── 核心：找到并点击课程卡片 ───
-        # NetAcad Dashboard 课程卡片结构（根据截图分析）：
-        # - 卡片包含：缩略图(带播放图标) + 机构名 + 课程/讲师 + 课程名(中文+英文) + 描述 + 日期
-        # - 点击卡片缩略图或标题进入课程
-        
-        keywords = ["网络信息安全技术", "Cybersecurity Essentials"]
-        
-        # 策略1：找到课程名元素，然后找到同一卡片内的缩略图/链接并点击
-        for kw in keywords:
-            result = await self.page.evaluate(f"""
-                () => {{
-                    const walker = document.createTreeWalker(
-                        document.body, NodeFilter.SHOW_TEXT, null, false
-                    );
-                    while (walker.nextNode()) {{
-                        if (walker.currentNode.textContent.trim().includes('{kw}')) {{
-                            // 找到了课程名文字节点，向上遍历找到卡片容器
-                            let card = walker.currentNode.parentElement;
-                            for (let i = 0; i < 15 && card; i++) {{
-                                // 卡片容器通常有多个子链接和图片
-                                const imgs = card.querySelectorAll('img, svg, video');
-                                const links = card.querySelectorAll('a[href]');
-                                
-                                if (imgs.length > 0 && links.length > 1) {{
-                                    // 找到了卡片容器！返回卡片的位置信息
-                                    const rect = card.getBoundingClientRect();
-                                    
-                                    // 收集卡片内所有链接
-                                    const linkInfos = Array.from(links).map(l => ({{
-                                        href: l.href,
-                                        text: l.textContent.trim().substring(0, 50),
-                                        rect: l.getBoundingClientRect(),
-                                    }}));
-                                    
-                                    return {{
-                                        found: true,
-                                        cardRect: {{ x: rect.x, y: rect.y, w: rect.width, h: rect.height }},
-                                        links: linkInfos,
-                                        tagName: card.tagName,
-                                        className: card.className.substring(0, 100),
-                                    }};
-                                }}
-                                card = card.parentElement;
-                            }}
-                        }}
-                    }}
-                    return {{ found: false }};
-                }}
-            """)
-            
-            if result and result.get("found"):
-                log.info(f"✅ 找到课程卡片: tag={result['tagName']}, class={result['className'][:50]}")
-                log.info(f"   卡片位置: x={result['cardRect']['x']}, y={result['cardRect']['y']}")
-                log.info(f"   卡片内链接数: {len(result['links'])}")
-                for li in result["links"][:5]:
-                    log.info(f"   📎 {li['text'][:30]} → {li['href'][:50]}")
+        await self.page.screenshot(path=screenshot_path("dashboard"), full_page=True)
+        log.info("📸 仪表盘截图已保存")
+
+        # 方法：用 JS 找到所有播放按钮(SVG)，点击第二个
+        play_result = await self.page.evaluate("""
+            () => {
+                // 找到所有 SVG 播放按钮（课程卡片缩略图上的圆形 play icon）
+                const svgs = document.querySelectorAll('svg');
+                const playButtons = [];
                 
-                # 点击卡片缩略图区域（卡片上部1/3位置，那里通常是可点击的缩略图）
-                card_x = result["cardRect"]["x"] + result["cardRect"]["w"] / 2
-                card_y = result["cardRect"]["y"] + result["cardRect"]["h"] * 0.2  # 上部20%位置（缩略图区域）
+                for (const svg of svgs) {
+                    const rect = svg.getBoundingClientRect();
+                    // 播放按钮通常在页面主体区域，尺寸适中
+                    if (rect.width > 20 && rect.width < 100 && rect.y > 100 && rect.y < 800) {
+                        // 检查是否在卡片区域内（排除顶栏/底栏的图标）
+                        const parent = svg.closest('a, button, [class*="card"], [class*="thumbnail"], [class*="image"]');
+                        playButtons.push({
+                            x: rect.x + rect.width / 2,
+                            y: rect.y + rect.height / 2,
+                            w: rect.width,
+                            h: rect.height,
+                            hasParent: !!parent,
+                            parentTag: parent ? parent.tagName : 'none',
+                        });
+                    }
+                }
                 
-                log.info(f"🖱 点击卡片缩略图区域: ({card_x:.0f}, {card_y:.0f})")
-                await self.page.mouse.click(card_x, card_y)
-                await asyncio.sleep(5)
-                
-                new_url = self.page.url
-                log.info(f"📍 点击后 URL: {new_url[:80]}")
-                
-                if "dashboard" not in new_url or "launch" in new_url:
-                    log.info("✅ 已进入课程！")
-                    return
-                
-                # 如果还在 dashboard，截图看看发生了什么
-                await self.page.screenshot(path=screenshot_path("after_card_click"))
-                
-                # 可能卡片点击后出现了弹窗或新页面
-                # 检查是否有新的 tab/窗口
+                return { count: playButtons.length, buttons: playButtons };
+            }
+        """)
+
+        log.info(f"🔍 找到 {play_result['count']} 个播放按钮")
+        for i, btn in enumerate(play_result['buttons']):
+            log.info(f"   ▶️ [{i}] 位置: ({btn['x']:.0f}, {btn['y']:.0f}) 尺寸: {btn['w']:.0f}x{btn['h']:.0f}")
+
+        if play_result['count'] >= 2:
+            # 点击第2个播放按钮（索引1）= 《网络信息安全技术》
+            target = play_result['buttons'][1]
+            log.info(f"▶️ 点击第2个播放按钮: ({target['x']:.0f}, {target['y']:.0f})")
+            await self.page.mouse.click(target['x'], target['y'])
+            await asyncio.sleep(5)
+
+            new_url = self.page.url
+            log.info(f"📍 点击后 URL: {new_url[:80]}")
+
+            if "launch" in new_url or "dashboard" not in new_url:
+                log.info("✅ 已进入课程！")
+                # 检查新标签页
                 pages = self.browser.pages
                 if len(pages) > 1:
                     self.page = pages[-1]
                     log.info(f"📄 切换到新标签页: {self.page.url[:80]}")
                     await asyncio.sleep(3)
-                    return
-                
-                # 尝试点击卡片标题区域（下半部分）
-                card_y2 = result["cardRect"]["y"] + result["cardRect"]["h"] * 0.6
-                log.info(f"🖱 尝试点击卡片标题区域: ({card_x:.0f}, {card_y2:.0f})")
-                await self.page.mouse.click(card_x, card_y2)
-                await asyncio.sleep(5)
-                
-                new_url = self.page.url
-                if "dashboard" not in new_url:
-                    log.info("✅ 已进入课程！")
-                    return
+                return
 
-        # 策略4：没有精确匹配，截图后等待手动操作
-        await self.page.screenshot(path=screenshot_path("no_course"), full_page=True)
-        log.warning(f"⚠️ 未找到课程《{self.course_name}》")
-        log.warning("💡 请在浏览器中手动点击课程卡片，脚本会在30秒后继续...")
+            # 如果还没跳转，直接点缩略图图片区域
+            log.info("⚠️ 播放按钮未跳转，尝试点击缩略图区域...")
+            await self.page.mouse.click(target['x'], target['y'] - 20)
+            await asyncio.sleep(5)
+            if "launch" in self.page.url or "dashboard" not in self.page.url:
+                log.info("✅ 已进入课程！")
+                return
+
+        # 兜底：截图后等待手动操作
+        await self.page.screenshot(path=screenshot_path("no_play_btn"), full_page=True)
+        log.warning("⚠️ 未能自动点击播放按钮，请手动点击课程")
+        log.warning("⏳ 等待30秒...")
         await asyncio.sleep(30)
 
     # ═══════════════════════════════════════════════════════
