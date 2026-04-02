@@ -1,0 +1,22 @@
+# 浏览器持久化数据
+scripts/.browser_data/
+
+# 运行时截图
+scripts/screenshots/
+
+# 运行状态
+scripts/.netacad_state.json
+
+# 登录调试截图
+scripts/login_*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# 打包产物
+*.skill
